@@ -1,0 +1,7 @@
+**/*.zip
+**/out
+**/.vscode
+**/.idea
+
+**/target
+**/*.jar
