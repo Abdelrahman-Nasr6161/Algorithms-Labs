@@ -1,13 +1,11 @@
 package nasr.huffman.modules;
-
 import java.io.*;
 import java.util.*;
-
 import nasr.huffman.helpers.ByteArrayKey;
 
 public class NasrFileReader {
     private static final int CHUNK_SIZE = 1024 * 1024 * 1024;
-
+    
     public HashMap<ByteArrayKey, Integer> buildFrequencyMap(File inputFile, int n) throws IOException {
         HashMap<ByteArrayKey, Integer> freqMap = new HashMap<>(1024 * 1024);
         
@@ -46,18 +44,20 @@ public class NasrFileReader {
                 
                 int remaining = totalLen - processable;
                 if (remaining > 0) {
-                    carry = new byte[remaining];
+                    byte[] newCarry = new byte[remaining];
                     int idx = 0;
                     while (carryIdx < carry.length && idx < remaining) {
-                        carry[idx++] = carry[carryIdx++];
+                        newCarry[idx++] = carry[carryIdx++];
                     }
                     while (chunkIdx < chunk.length && idx < remaining) {
-                        carry[idx++] = chunk[chunkIdx++];
+                        newCarry[idx++] = chunk[chunkIdx++];
                     }
+                    carry = newCarry;
                 } else {
                     carry = new byte[0];
                 }
             }
+
         }
         
         return freqMap;

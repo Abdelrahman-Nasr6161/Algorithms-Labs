@@ -1,5 +1,4 @@
 package nasr.huffman.modules;
-
 import java.io.*;
 import java.util.*;
 
@@ -50,6 +49,11 @@ public class Decompressor {
             
             inChannel.position(compressedDataStart);
             
+            // Calculate how many complete blocks we have
+            long completeBlocks = originalLength / n;
+            long expectedDecoded = completeBlocks * n;
+            int remainderBytes = (int)(originalLength % n);
+            
             java.nio.ByteBuffer readBuffer = java.nio.ByteBuffer.allocateDirect(CHUNK_SIZE);
             byte[] outputBuffer = new byte[CHUNK_SIZE];
             int outputPos = 0;
@@ -59,35 +63,34 @@ public class Decompressor {
             
             long t3 = System.currentTimeMillis();
             
-            while (inChannel.read(readBuffer) != -1 && totalDecoded < originalLength) {
+            // Decode complete blocks only
+            while (inChannel.read(readBuffer) != -1 && totalDecoded < expectedDecoded) {
                 readBuffer.flip();
                 
-                while (readBuffer.hasRemaining() && totalDecoded < originalLength) {
+                while (readBuffer.hasRemaining() && totalDecoded < expectedDecoded) {
                     byte b = readBuffer.get();
                     
-                    for (int bit = 7; bit >= 0; bit--) {
+                    for (int bit = 7; bit >= 0 && totalDecoded < expectedDecoded; bit--) {
                         temp.append((b & (1 << bit)) != 0 ? '1' : '0');
                         
                         String code = temp.toString();
                         byte[] block = reverseMap.get(code);
                         
                         if (block != null) {
-                            for (byte bt : block) {
-                                outputBuffer[outputPos++] = bt;
+                            int bytesToWrite = (int) Math.min(block.length, expectedDecoded - totalDecoded);
+                            
+                            for (int i = 0; i < bytesToWrite; i++) {
+                                outputBuffer[outputPos++] = block[i];
                                 totalDecoded++;
                                 
                                 if (outputPos == outputBuffer.length) {
                                     outChannel.write(java.nio.ByteBuffer.wrap(outputBuffer));
                                     outputPos = 0;
                                 }
-                                
-                                if (totalDecoded >= originalLength) {
-                                    break;
-                                }
                             }
                             temp.setLength(0);
                             
-                            if (totalDecoded >= originalLength) {
+                            if (totalDecoded >= expectedDecoded) {
                                 break;
                             }
                         }
@@ -97,12 +100,29 @@ public class Decompressor {
                 readBuffer.clear();
             }
             
+            // Flush output buffer
             if (outputPos > 0) {
                 outChannel.write(java.nio.ByteBuffer.wrap(outputBuffer, 0, outputPos));
+                outputPos = 0;
             }
             
             long t4 = System.currentTimeMillis();
             System.out.println("Decode and write in chunks: " + (t4 - t3) + " ms");
+            
+            // Now read the remainder bytes at the end of the file
+            long t5 = System.currentTimeMillis();
+            try (RandomAccessFile raf = new RandomAccessFile(inputFile, "r")) {
+                raf.seek(inputFile.length() - 4 - remainderBytes);
+                int remainderCount = raf.readInt();
+                
+                if (remainderCount > 0 && remainderCount == remainderBytes) {
+                    byte[] remainder = new byte[remainderCount];
+                    raf.readFully(remainder);
+                    outChannel.write(java.nio.ByteBuffer.wrap(remainder));
+                }
+            }
+            long t6 = System.currentTimeMillis();
+            System.out.println("Write remainder bytes: " + (t6 - t5) + " ms");
         }
         
         long endTime = System.currentTimeMillis();

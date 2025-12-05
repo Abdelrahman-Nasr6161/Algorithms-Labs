@@ -1,19 +1,17 @@
 package nasr.huffman.modules;
-
 import java.io.*;
 import java.util.*;
-
 import nasr.huffman.helpers.ByteArrayKey;
 
 public class NasrFileWriter {
     private static final int CHUNK_SIZE = 1024 * 1024 * 1024;
 
-    public void writeCompressed(File inputFile, File outFile, int n, long fileSize, HashMap<ByteArrayKey, String> codes)
-            throws IOException {
+    public void writeCompressed(File inputFile, File outFile, int n, long fileSize, 
+                                HashMap<ByteArrayKey, String> codes) throws IOException {
         long t1 = System.currentTimeMillis();
 
         try (FileOutputStream fos = new FileOutputStream(outFile);
-                DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos, 65536))) {
+             DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(fos, 65536))) {
 
             dos.writeInt(n);
             dos.writeInt(codes.size());
@@ -33,7 +31,7 @@ public class NasrFileWriter {
             long t3 = System.currentTimeMillis();
 
             try (FileInputStream fis = new FileInputStream(inputFile);
-                    java.nio.channels.FileChannel inChannel = fis.getChannel()) {
+                 java.nio.channels.FileChannel inChannel = fis.getChannel()) {
 
                 java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocateDirect(CHUNK_SIZE);
                 byte[] carry = new byte[0];
@@ -85,14 +83,15 @@ public class NasrFileWriter {
 
                     int remaining = totalLen - processable;
                     if (remaining > 0) {
-                        carry = new byte[remaining];
+                        byte[] newCarry = new byte[remaining];
                         int idx = 0;
                         while (carryIdx < carry.length && idx < remaining) {
-                            carry[idx++] = carry[carryIdx++];
+                            newCarry[idx++] = carry[carryIdx++];
                         }
                         while (chunkIdx < chunk.length && idx < remaining) {
-                            carry[idx++] = chunk[chunkIdx++];
+                            newCarry[idx++] = chunk[chunkIdx++];
                         }
+                        carry = newCarry;
                     } else {
                         carry = new byte[0];
                     }
@@ -104,6 +103,11 @@ public class NasrFileWriter {
 
                 if (outPos > 0) {
                     fos.write(outBuffer, 0, outPos);
+                }
+                
+                dos.writeInt(carry.length);
+                if (carry.length > 0) {
+                    dos.write(carry);
                 }
             }
 
