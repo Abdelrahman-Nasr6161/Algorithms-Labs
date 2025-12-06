@@ -48,7 +48,6 @@ public class HuffmanBuilder {
         Node root = pq.poll();
         HashMap<ByteArrayKey, String> codes = new HashMap<>(freqMap.size());
         
-        // Handle edge case: single unique block in file
         if (root.bytes != null) {
             codes.put(new ByteArrayKey(root.bytes), "0");
         } else {

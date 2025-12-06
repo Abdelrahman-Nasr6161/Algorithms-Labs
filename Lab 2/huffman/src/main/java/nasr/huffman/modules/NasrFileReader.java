@@ -4,7 +4,7 @@ import java.util.*;
 import nasr.huffman.helpers.ByteArrayKey;
 
 public class NasrFileReader {
-    private static final int CHUNK_SIZE = 1024 * 1024 * 1024;
+    private static final int CHUNK_SIZE = 1024*1024*1024;
     
     public HashMap<ByteArrayKey, Integer> buildFrequencyMap(File inputFile, int n) throws IOException {
         HashMap<ByteArrayKey, Integer> freqMap = new HashMap<>(1024 * 1024);

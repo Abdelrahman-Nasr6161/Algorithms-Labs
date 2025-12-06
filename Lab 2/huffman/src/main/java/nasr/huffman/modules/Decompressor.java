@@ -1,132 +1,177 @@
 package nasr.huffman.modules;
-import java.io.*;
-import java.util.*;
+
+import java.io.File;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.util.HashMap;
 
 public class Decompressor {
+
     private static final int CHUNK_SIZE = 1024 * 1024 * 1024;
 
     public void decompress(String inputPath) throws Exception {
-        long startTime = System.currentTimeMillis();
+
+        long start = System.currentTimeMillis();
+
         File inputFile = new File(inputPath);
-        File parentDir = inputFile.getParentFile();
+        File parent = inputFile.getParentFile();
 
         long t1 = System.currentTimeMillis();
+
         int n;
         long originalLength;
         HashMap<String, byte[]> reverseMap = new HashMap<>();
         int maxCodeLen = 0;
         long compressedDataStart = 0;
-        
-        try (DataInputStream dis = new DataInputStream(new BufferedInputStream(new FileInputStream(inputFile), 65536))) {
-            n = dis.readInt();
-            int codeCount = dis.readInt();
-            
+
+        try (FileChannel headerChannel = FileChannel.open(inputFile.toPath(), java.nio.file.StandardOpenOption.READ)) {
+
+            ByteBuffer intBuf = ByteBuffer.allocate(4);
+            ByteBuffer longBuf = ByteBuffer.allocate(8);
+
+            headerChannel.read(intBuf);
+            intBuf.flip();
+            n = intBuf.getInt();
+            intBuf.clear();
+
+            headerChannel.read(intBuf);
+            intBuf.flip();
+            int codeCount = intBuf.getInt();
+            intBuf.clear();
+
             for (int i = 0; i < codeCount; i++) {
-                int len = dis.readInt();
-                byte[] keyBytes = new byte[len];
-                dis.readFully(keyBytes);
-                String code = dis.readUTF();
-                reverseMap.put(code, keyBytes);
-                maxCodeLen = Math.max(maxCodeLen, code.length());
+                headerChannel.read(intBuf);
+                intBuf.flip();
+                int keyLen = intBuf.getInt();
+                intBuf.clear();
+
+                byte[] key = new byte[keyLen];
+                ByteBuffer kbuf = ByteBuffer.wrap(key);
+                headerChannel.read(kbuf);
+
+                headerChannel.read(intBuf);
+                intBuf.flip();
+                int bitLen = intBuf.getInt();
+                intBuf.clear();
+
+                int byteLen = (bitLen + 7) >>> 3;
+                byte[] packed = new byte[byteLen];
+                ByteBuffer pbuf = ByteBuffer.wrap(packed);
+                headerChannel.read(pbuf);
+
+                StringBuilder sb = new StringBuilder(bitLen);
+                int bitsRead = 0;
+                for (byte b : packed) {
+                    for (int bit = 7; bit >= 0 && bitsRead < bitLen; bit--) {
+                        sb.append(((b >>> bit) & 1) == 1 ? '1' : '0');
+                        bitsRead++;
+                    }
+                }
+
+                String code = sb.toString();
+
+                reverseMap.put(code, key);
+                maxCodeLen = Math.max(maxCodeLen, bitLen);
+
+                compressedDataStart += 4 + keyLen + 4 + byteLen;
             }
 
-            originalLength = dis.readLong();
-            compressedDataStart = 4 + 4 + 8;
-            for (String code : reverseMap.keySet()) {
-                compressedDataStart += 4 + n + 2 + code.length();
-            }
+            headerChannel.read(longBuf);
+            longBuf.flip();
+            originalLength = longBuf.getLong();
+            longBuf.clear();
+
+            compressedDataStart += 4 + 4 + 8;
         }
-        
+
         long t2 = System.currentTimeMillis();
-        System.out.println("Read header and code table: " + (t2 - t1) + " ms");
+        System.out.println("Header read time: " + (t2 - t1) + " ms");
 
         String outputName = "extracted." + inputFile.getName().replace(".hc", "");
-        
-        try (FileInputStream fis = new FileInputStream(inputFile);
-             FileOutputStream fos = new FileOutputStream(new File(parentDir, outputName));
-             java.nio.channels.FileChannel inChannel = fis.getChannel();
-             java.nio.channels.FileChannel outChannel = fos.getChannel()) {
-            
-            inChannel.position(compressedDataStart);
-            
-            // Calculate how many complete blocks we have
+
+        try (FileChannel in = FileChannel.open(inputFile.toPath(), java.nio.file.StandardOpenOption.READ);
+             FileChannel out = FileChannel.open(
+                     new File(parent, outputName).toPath(),
+                     java.nio.file.StandardOpenOption.CREATE,
+                     java.nio.file.StandardOpenOption.WRITE,
+                     java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)) {
+
+            in.position(compressedDataStart);
+
             long completeBlocks = originalLength / n;
             long expectedDecoded = completeBlocks * n;
-            int remainderBytes = (int)(originalLength % n);
-            
-            java.nio.ByteBuffer readBuffer = java.nio.ByteBuffer.allocateDirect(CHUNK_SIZE);
-            byte[] outputBuffer = new byte[CHUNK_SIZE];
-            int outputPos = 0;
-            long totalDecoded = 0;
-            
+            int remainderBytes = (int) (originalLength % n);
+
+            ByteBuffer readBuf = ByteBuffer.allocateDirect(CHUNK_SIZE);
+            byte[] outputBuf = new byte[CHUNK_SIZE];
+            int outPos = 0;
+
+            long decoded = 0;
             StringBuilder temp = new StringBuilder(maxCodeLen);
-            
+
             long t3 = System.currentTimeMillis();
-            
-            // Decode complete blocks only
-            while (inChannel.read(readBuffer) != -1 && totalDecoded < expectedDecoded) {
-                readBuffer.flip();
-                
-                while (readBuffer.hasRemaining() && totalDecoded < expectedDecoded) {
-                    byte b = readBuffer.get();
-                    
-                    for (int bit = 7; bit >= 0 && totalDecoded < expectedDecoded; bit--) {
-                        temp.append((b & (1 << bit)) != 0 ? '1' : '0');
-                        
-                        String code = temp.toString();
-                        byte[] block = reverseMap.get(code);
-                        
+
+            while (decoded < expectedDecoded) {
+                readBuf.clear();
+                if (in.read(readBuf) == -1)
+                    break;
+                readBuf.flip();
+
+                while (readBuf.hasRemaining() && decoded < expectedDecoded) {
+                    byte b = readBuf.get();
+
+                    for (int bit = 7; bit >= 0 && decoded < expectedDecoded; bit--) {
+                        temp.append(((b >> bit) & 1) == 1 ? '1' : '0');
+
+                        byte[] block = reverseMap.get(temp.toString());
                         if (block != null) {
-                            int bytesToWrite = (int) Math.min(block.length, expectedDecoded - totalDecoded);
-                            
-                            for (int i = 0; i < bytesToWrite; i++) {
-                                outputBuffer[outputPos++] = block[i];
-                                totalDecoded++;
-                                
-                                if (outputPos == outputBuffer.length) {
-                                    outChannel.write(java.nio.ByteBuffer.wrap(outputBuffer));
-                                    outputPos = 0;
+                            int writeCount = (int) Math.min(block.length, expectedDecoded - decoded);
+
+                            for (int i = 0; i < writeCount; i++) {
+                                outputBuf[outPos++] = block[i];
+                                decoded++;
+
+                                if (outPos == outputBuf.length) {
+                                    out.write(ByteBuffer.wrap(outputBuf));
+                                    outPos = 0;
                                 }
                             }
                             temp.setLength(0);
-                            
-                            if (totalDecoded >= expectedDecoded) {
-                                break;
-                            }
                         }
                     }
                 }
-                
-                readBuffer.clear();
             }
-            
-            // Flush output buffer
-            if (outputPos > 0) {
-                outChannel.write(java.nio.ByteBuffer.wrap(outputBuffer, 0, outputPos));
-                outputPos = 0;
+
+            if (outPos > 0) {
+                out.write(ByteBuffer.wrap(outputBuf, 0, outPos));
             }
-            
+
             long t4 = System.currentTimeMillis();
-            System.out.println("Decode and write in chunks: " + (t4 - t3) + " ms");
-            
-            // Now read the remainder bytes at the end of the file
+            System.out.println("Decoded main section: " + (t4 - t3) + " ms");
+
             long t5 = System.currentTimeMillis();
-            try (RandomAccessFile raf = new RandomAccessFile(inputFile, "r")) {
-                raf.seek(inputFile.length() - 4 - remainderBytes);
-                int remainderCount = raf.readInt();
-                
-                if (remainderCount > 0 && remainderCount == remainderBytes) {
-                    byte[] remainder = new byte[remainderCount];
-                    raf.readFully(remainder);
-                    outChannel.write(java.nio.ByteBuffer.wrap(remainder));
-                }
+
+            long footerPos = inputFile.length() - 4 - remainderBytes;
+            in.position(footerPos);
+
+            ByteBuffer remCountBuf = ByteBuffer.allocate(4);
+            in.read(remCountBuf);
+            remCountBuf.flip();
+            int remCount = remCountBuf.getInt();
+
+            if (remCount == remainderBytes && remCount > 0) {
+                ByteBuffer remBuf = ByteBuffer.allocate(remCount);
+                in.read(remBuf);
+                remBuf.flip();
+                out.write(remBuf);
             }
+
             long t6 = System.currentTimeMillis();
             System.out.println("Write remainder bytes: " + (t6 - t5) + " ms");
         }
-        
-        long endTime = System.currentTimeMillis();
-        System.out.println("Total decompression time: " + (endTime - startTime) + " ms");
-        System.out.println("Decompression complete: " + outputName);
+
+        long end = System.currentTimeMillis();
+        System.out.println("Total time: " + (end - start) + " ms");
+        System.out.println("Done -> " + outputName);
     }
 }
